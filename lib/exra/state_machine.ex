@@ -1,4 +1,4 @@
-defmodule StateMachine do
+defmodule Exra.StateMachine do
   @type t :: module()
 
   @callback leader() ::any()

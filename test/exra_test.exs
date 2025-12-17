@@ -6,7 +6,7 @@ defmodule ExraTest do
   #   assert Exra.hello() == :world
   # end
 
-  # @tag only: true
+  @tag leader: true
   test "3 nodes startup" do
     {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
     {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
@@ -32,7 +32,7 @@ defmodule ExraTest do
     assert GenServer.call(pid1, :get_state).term == 1
   end
 
-  # @tag only: true
+  @tag leader: true
   test "leader split brain" do
     Mimic.set_mimic_global()
 
@@ -80,12 +80,12 @@ defmodule ExraTest do
     assert GenServer.call(pid2, :get_state).state == :leader
     assert GenServer.call(pid2, :get_state).term == 2
 
-    send(pid1, :send_ping)
+    send(pid1, :send_heartbeat)
     assert GenServer.call(pid1, :get_state).term == 1
     assert GenServer.call(pid1, :get_state).state == :leader
   end
 
-  # @tag only: true
+  @tag logs: true
   test "Log replication" do
     Mimic.set_mimic_global()
     {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
@@ -129,7 +129,7 @@ defmodule ExraTest do
     assert GenServer.call(pid2, :get_state).logs |> length() == 2
   end
 
-  @tag only: true
+  @tag logs: true
   test "A down follower should catch up" do
     Mimic.set_mimic_global()
     {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
@@ -217,14 +217,119 @@ defmodule ExraTest do
       new_committed_index: 3,
       old_committed_index: 2
     }})
+    # Two, as it'll broadcast on when it's cought up, and then again on new message
+    assert_receive({:committed, %{
+      pid: ^pid3,
+      state: :follower,
+      new_committed_index: 2,
+      old_committed_index: 1
+    }})
     assert_receive({:committed, %{
       pid: ^pid3,
       state: :follower,
       new_committed_index: 3,
-      old_committed_index: 1
+      old_committed_index: 2
     }})
 
     assert GenServer.call(pid3, :get_state).committed_index == 3
     assert GenServer.call(pid3, :get_state).logs |> length == 4
   end
+
+  @tag config_change: true
+  test "Add one node" do
+    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+
+    nodes = [pid1, pid2, pid3]
+    nodes |> Enum.each(fn (node) ->
+      node |> GenServer.cast({:init_set_nodes, nodes})
+    end)
+    send(pid1, :timeout)
+    assert_receive({:leader, ^pid1})
+    assert_receive({:follower, ^pid2})
+    assert_receive({:follower, ^pid3})
+
+    {:ok, pid4} = Exra.start_link(%{name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner})
+    GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
+    assert_receive{:committed, %{
+      pid: ^pid4,
+      state: :learner
+    }}
+
+    assert_receive({:committed, %{
+      pid: ^pid1,
+      state: :leader,
+      old_committed_index: 0,
+      new_committed_index: 1
+    }})
+
+    GenServer.call(pid1, :get_state)
+    assert GenServer.call(pid1, :get_state).nodes |> length == 4
+    assert GenServer.call(pid1, :get_state).logs |> length == 2
+  end
+
+  @tag config_change: true
+  test "Add one node with log entry" do
+    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+
+    nodes = [pid1, pid2, pid3]
+    nodes |> Enum.each(fn (node) ->
+      node |> GenServer.cast({:init_set_nodes, nodes})
+    end)
+    send(pid1, :timeout)
+    assert_receive({:leader, ^pid1})
+    assert_receive({:follower, ^pid2})
+    assert_receive({:follower, ^pid3})
+
+    GenServer.cast(pid1, {:append_from_user, "First log entry"})
+    assert_receive({:committed, %{
+      pid: ^pid1,
+      state: :leader,
+      new_committed_index: 1,
+      old_committed_index: 0
+    }})
+    assert_receive({:committed, %{
+      pid: ^pid2,
+      state: :follower,
+      new_committed_index: 1,
+      old_committed_index: 0
+    }})
+    assert_receive({:committed, %{
+      pid: ^pid3,
+      state: :follower,
+      new_committed_index: 1,
+      old_committed_index: 0
+    }})
+
+    # IO.puts("-------------------------------")
+
+    {:ok, pid4} = Exra.start_link(%{name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner})
+    GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
+    assert_receive{:committed, %{
+      pid: ^pid4,
+      state: :learner,
+      new_committed_index: 1,
+      old_committed_index: 0
+    }}
+
+    assert_receive({:committed, %{
+      pid: ^pid1,
+      state: :leader,
+      old_committed_index: 1,
+      new_committed_index: 2
+    }})
+
+    GenServer.call(pid1, :get_state)
+    assert GenServer.call(pid1, :get_state).nodes |> length == 4
+    assert GenServer.call(pid1, :get_state).logs |> length == 3
+  end
+
+  # test "remove one node"
+
+  # test "remove one node with log entry"
+
+  # test "Remove the current leader"
 end
