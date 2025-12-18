@@ -40,6 +40,10 @@ defmodule Exra.LogEntry do
       command: command,
       type: :config_change
     }
+
+    state = %{state |
+      nodes: MapSet.union(state.nodes |> MapSet.new(), command |> elem(1) |> MapSet.new()) |> MapSet.to_list() |> Enum.reject(fn (node) -> node == self() end)
+    }
     append_log(log, state)
   end
   def handle_cast({:replicated, false, from}, state = %{state: :leader, next_indexes: next_indexes, logs: logs, term: term}) do
@@ -60,8 +64,7 @@ defmodule Exra.LogEntry do
   end
   def handle_cast({:replicated, index, from}, state = %{
     state: :leader, next_indexes: next_indexes, logs: logs = [log | _],
-    match_indexes: match_indexes, committed_index: committed_index, nodes: nodes,
-    subscriber: subscriber
+    match_indexes: match_indexes, committed_index: committed_index, nodes: nodes
   }) do
     new_next_indexes = next_indexes |> Map.put(from, index + 1)
     new_match_indexes = match_indexes |> Map.put(from, index)
@@ -73,14 +76,13 @@ defmodule Exra.LogEntry do
     c_old_new_match_indexes = Map.take(new_match_indexes, c_old)
     c_new_new_match_indexes = Map.take(new_match_indexes, c_new)
 
-    c_old_commit = [log.index | (c_old_new_match_indexes |> Map.values())] |> median()
-    c_new_commit = [log.index | (c_new_new_match_indexes |> Map.values())] |> median()
+    c_old_commit = [log.index | (c_old_new_match_indexes |> Map.values())] |> Exra.Utils.median()
+    c_new_commit = [log.index | (c_new_new_match_indexes |> Map.values())] |> Exra.Utils.median()
 
     new_committed_index = min(c_old_commit, c_new_commit)
-
     nodes = if (!is_nil(c_log) and c_log.index <= new_committed_index) do # Config change is fully applied, so old nodes are no longer part of the cluster
       nodes_removed(MapSet.difference(
-        nodes |> MapSet.new(),
+        [self() | nodes] |> Enum.uniq() |> MapSet.new(),
         c_new |> MapSet.new()
       ) |> MapSet.to_list())
       c_new
@@ -90,25 +92,25 @@ defmodule Exra.LogEntry do
 
     case new_committed_index > committed_index do
       true ->
+
         nodes
         |> Enum.filter(fn (node) -> node != self() end)
         |> Enum.each(fn (node) ->
           GenServer.cast(node, {:committed_index, new_committed_index})
         end)
-        # TODO, send to state machine
-        !is_nil(subscriber) && send(subscriber, {:committed, %{
+        Exra.Utils.notify_state_machine(state, :committed, [%{
           pid: self(),
           new_committed_index: new_committed_index,
           old_committed_index: committed_index,
           state: state.state
-        }})
+        }])
       false -> # Nothings changed, don't tell anyone
         nil
     end
 
 
     {:noreply, %{state | next_indexes: new_next_indexes, match_indexes: new_match_indexes, committed_index: new_committed_index,
-      nodes:  nodes
+      nodes:  nodes |> Enum.filter(fn (node) -> node != self() end)
     }}
   end
 
@@ -118,7 +120,7 @@ defmodule Exra.LogEntry do
     {:noreply, state}
   end
   def handle_cast({:replicate, logs, previous_log, from, term, committed_index}, state = %{state: my_state, logs: my_logs, term: my_term,
-    timeout: timeout, subscriber: subscriber, committed_index: my_committed_index})
+    timeout: timeout, committed_index: my_committed_index})
   do
 
     !is_nil(timeout) && Process.cancel_timer(timeout)
@@ -126,7 +128,7 @@ defmodule Exra.LogEntry do
 
     state = if term >= state.term and state.state != :follower do
         new_state = %{state | state: :follower, term: term, voted_for: (if term > state.term, do: nil, else: state.voted_for)}
-        notify_state_machine(state, :follower, term)
+        Exra.Utils.notify_state_machine(state, :follower, [term])
         new_state
     else
         state
@@ -143,13 +145,12 @@ defmodule Exra.LogEntry do
         GenServer.cast(from, {:replicated, hd(out).index, self()})
 
         if committed_index > my_committed_index or my_state == :learner  do
-          # TODO tell state machine
-          !is_nil(subscriber) && send(subscriber, {:committed, %{
+          Exra.Utils.notify_state_machine(state, :committed, [%{
             pid: self(),
             new_committed_index: committed_index,
             old_committed_index: my_committed_index,
             state: my_state
-          }})
+          }])
         end
 
         out
@@ -159,32 +160,59 @@ defmodule Exra.LogEntry do
         my_logs # my old logs, nothings changed
     end
 
+    # Ensure we have all the nodes
+    { c_old, c_new, _c_log} = get_config_nodes(
+      state.nodes,
+      new_logs |> Enum.take_while(fn (%{index: index}) -> index > committed_index end)
+    )
+
     {:noreply, %{state |
       logs: new_logs,
       state: :follower,
       term: term,
       voted_for: (if term > my_term, do: nil, else: state.voted_for),
       timeout: timeout,
-      committed_index: committed_index
+      committed_index: committed_index,
+      nodes: c_new ++ c_old |> Enum.reject(fn (node) -> node == self()  end) |> Enum.uniq()
     }}
   end
 
-
-  def handle_cast({:committed_index, committed_index}, state = %{logs: [log | _], subscriber: subscriber, committed_index: old_committed_index}) do
+  def handle_cast(_message = {:committed_index, committed_index}, state = %{logs: logs = [log | _], committed_index: old_committed_index}) do
     new_committed_index = min(committed_index, log.index)
     if (new_committed_index != old_committed_index) do
-      # TODO: Send to state machine
-      !is_nil(subscriber) && send(subscriber, {:committed, %{
+      Exra.Utils.notify_state_machine(state, :committed, [%{
         pid: self(),
         new_committed_index: new_committed_index,
         old_committed_index: old_committed_index,
         state: state.state
-      }})
+      }])
+    else
     end
 
-    {:noreply, %{state | committed_index: new_committed_index}}
+    { _c_old, c_new_committed, c_logs_committed} = get_config_nodes(
+      state.nodes,
+      logs
+      |> Enum.take_while(fn (%{index: index}) -> index > old_committed_index end)
+      |> Enum.drop_while(fn (%{index: index}) -> index > new_committed_index end)
+    )
+    committed_nodes = (if (!is_nil(c_logs_committed)), do: c_new_committed, else: state.nodes)
+
+    { c_old_uncommitted, c_new_uncommitted, c_log} = get_config_nodes(
+      state.nodes,
+      logs
+      |> Enum.take_while(fn (%{index: index}) -> index > new_committed_index end)
+    )
+    uncommitted_nodes = (if (!is_nil(c_log)), do: (c_new_uncommitted ++ c_old_uncommitted) |> Enum.uniq(), else: committed_nodes)
+
+    {:noreply,
+      %{state |
+        committed_index: new_committed_index,
+        nodes: uncommitted_nodes |> Enum.reject(fn (node) -> node == self() end)
+      }
+    }
   end
 
+  # Retrieves the last log with configuration change
   def get_config_nodes(nodes, logs) do
     log = logs |> Enum.find(fn
       (%{type: :config_change, command: {_a, _b}}) -> true
@@ -196,13 +224,6 @@ defmodule Exra.LogEntry do
     else
       {log.command |> elem(0), log.command |> elem(1), log}
     end
-  end
-
-  def median(indexes) do
-    sorted_matches = indexes |> Enum.sort(:desc)
-    middle_index = sorted_matches |> length() |> div(2)
-    median = Enum.at(sorted_matches, middle_index)
-    median
   end
 
   def nodes_removed(nodes) do
@@ -226,9 +247,9 @@ defmodule Exra.LogEntry do
     nodes
     |> Enum.filter(fn (node) -> node != self() end)
     |> Enum.map(fn (node) ->
-      ni = Map.get(next_indexes, node, 1)
-      logs_to_send = Enum.take_while(new_logs, fn (%{index: index}) -> index >= ni end)
-      previous_log = Enum.find(logs, fn %{index: index} -> index == (ni - 1) end)
+      next_index = Map.get(next_indexes, node, 1)
+      logs_to_send = Enum.take_while(new_logs, fn (%{index: index}) -> index >= next_index end)
+      previous_log = Enum.find(logs, fn %{index: index} -> index == (next_index - 1) end)
 
       GenServer.cast(node, {:replicate, logs_to_send, %{
         index: previous_log.index,
@@ -251,10 +272,5 @@ defmodule Exra.LogEntry do
       match_indexes: match_indexes
     }}
   end
-  def notify_state_machine(state = %{subscriber: subscriber}, function, term) do
-    if function_exported?(state.state_machine, function, 1) do
-      apply(state.state_machine, function, [term])
-    end
-    !is_nil(subscriber) && send(subscriber, {function, self()})
-  end
+
 end

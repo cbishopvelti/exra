@@ -1,5 +1,5 @@
 defmodule Exra do
-  use GenServer
+  use GenServer, restart: :transient
 
   require Logger
 
@@ -68,15 +68,13 @@ defmodule Exra do
     {:ok, state}
   end
 
-  def handle_info(:timeout, _state = %{nodes: []}) do
-    raise "Nodes can't be empty, as it should atleast have oneself"
-  end
-  def handle_info(:timeout, state = %{nodes: [_self], term: term}) do
+
+  def handle_info(:timeout, state = %{nodes: [], term: term}) do
     !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
-    # Only node, so become leader straight away
+    # No nodes, so become leader
     timeout = tick(:send_heartbeat, state)
     new_term = term + 1
-    Exra.LogEntry.notify_state_machine(state, :leader, new_term)
+    Exra.Utils.notify_state_machine(state, :leader, [new_term])
     {:noreply, %{state | state: :leader, term: new_term, voted_for: nil, votes: 1, timeout: timeout}}
   end
   def handle_info(:timeout, state = %{logs: [log | _]}) do
@@ -138,7 +136,7 @@ defmodule Exra do
     timeout = tick(:send_heartbeat, state)
 
     broadcast_from({:follower, term}, state)
-    Exra.LogEntry.notify_state_machine(state, :leader, term)
+    Exra.Utils.notify_state_machine(state, :leader, [term])
 
     # We've won the vote, become the leader.
     {:noreply, %{state | votes: votes + 1, state: :leader, timeout: timeout}}
@@ -150,6 +148,7 @@ defmodule Exra do
   def handle_cast({:vote, false, term}, state = %{term: my_term}) when term > my_term do
     {:noreply, %{state |
       state: :follower,
+      term: term,
       voted_for: nil
     }}
   end
@@ -166,7 +165,7 @@ defmodule Exra do
   end
   # Tell everyone they're a follower
   def handle_cast({:follower, term}, state) do
-    Exra.LogEntry.notify_state_machine(state, :follower, term)
+    Exra.Utils.notify_state_machine(state, :follower, [term])
     {:noreply, state}
   end
   def handle_cast({:stale, term}, state) do
@@ -180,18 +179,19 @@ defmodule Exra do
       timeout: timeout
     }}
   end
-  def handle_cast({:removed, by}, state = %{timeout: timeout, subscriber: subscriber}) do
+  def handle_cast({:removed, by}, state = %{timeout: timeout}) do
     !is_nil(timeout) && Process.cancel_timer(timeout)
-    !is_nil(subscriber) && send(subscriber, {:removed, self(), by})
+    # !is_nil(subscriber) && send(subscriber, {:removed, self(), by})
+    Exra.Utils.notify_state_machine(state, :removed, [by])
 
-    {:noreply, %{state |
-      timeout: nil
-    }}
+    {:stop, :normal, state}
+    # {:noreply, %{state |
+    #   timeout: nil
+    # }}
   end
 
   # get_state for testing
   def handle_call(:get_state, {_from, _}, state) do
-    # IO.inspect(state.term, label: "002 #{state.name}")
     {:reply, state, state}
   end
   # Only call on leader
@@ -210,8 +210,8 @@ defmodule Exra do
 
     fresh_nodes = MapSet.difference(
       new_nodes |> MapSet.new(),
-      state.nodes |> MapSet.new()
-    )
+      [ self() | state.nodes] |> MapSet.new()
+    ) |> MapSet.to_list()
     # Catchup fresh nodes
     fresh_nodes
     |> Enum.map(fn (node) ->
@@ -222,7 +222,7 @@ defmodule Exra do
     end)
 
     # Commit the config change
-    GenServer.cast(self(), {:config_change, {nodes, new_nodes}})
+    GenServer.cast(self(), {:config_change, {[self() | nodes], new_nodes}})
 
     {:reply, :ok, state}
   end

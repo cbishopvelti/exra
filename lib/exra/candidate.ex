@@ -1,52 +1,72 @@
 defmodule Exra.Candidate do
 
-  # We're still catching up with data, so we can't vote.
-  def handle_cast({:candidate, _a, _b, _c, _d}, state = %{state: :learner}) do
-    {:noreply, state}
-  end
-  # They're not in the cluster
-  def handle_cast(message = {:candidate, from, their_term, _b, _c}, state = %{nodes: nodes, term: my_term}) do
-    if (from in nodes) do
-      handle_cast_2(message, state)
-    else
-      new_state = vote_for_candidate({from, false, max(their_term, my_term)}, state)
-      {:noreply, new_state}
-    end
-  end
-  # Their term is less we've either already voted, or something else has taken precedence.
-  def handle_cast_2({:candidate, from, their_term, _log_term, _log_index}, state = %{term: my_term}) when their_term < my_term do
-    new_state = vote_for_candidate({from, false, my_term}, state)
-    {:noreply, new_state}
-  end
-  def handle_cast_2({:candidate, from, term, log_term, log_index}, state = %{term: term, logs: [%{index: my_log_index, term: my_log_term} | _]})
-    when (is_nil(state.voted_for) or state.voted_for == from)
-  do
-    if log_term > my_log_term or (log_term == my_log_term and log_index >= my_log_index) do
-      new_state = vote_for_candidate({from, true, term}, state)
+  def handle_cast( {:candidate, from, their_term, their_log_term, their_log_index}, state) do
+    state = %{term: my_term, nodes: nodes, state: role} = maybe_step_down(their_term, state)
+
+    with {:in_our_cluster, true} <- {:in_our_cluster, from in nodes},
+      {:can_vote, true} <- {:can_vote, role in [:follower]},
+      {:valid_term, true} <- {:valid_term, valid_term(their_term,  my_term)},
+      {:not_voted, true} <- {:not_voted, not_voted(their_term, from, state)},
+      {:valid_logs, true} <- {:valid_logs, valid_logs(their_log_term, their_log_index, state)}
+
+    do
+      new_state = vote_for_candidate({from, true, their_term}, state)
       {:noreply, new_state}
     else
-      # Logs were not fresh enough
-      new_state = vote_for_candidate({from, false, term}, state)
-      {:noreply, new_state}
+      {_, false } ->
+        new_state = vote_for_candidate({from, false, max(their_term, my_term)}, state)
+        {:noreply, new_state}
     end
   end
-  # Already voted in this term
-  def handle_cast_2({:candidate, from, term, _lt, _li}, state = %{term: term}) do
-    new_state = vote_for_candidate({from, false, term}, state)
-    {:noreply, new_state}
+
+  defp maybe_step_down(their_term, state = %{term: my_term, state: role, timeout: timeout}) when their_term > my_term do
+
+    timeout = if (role !== :learner) do
+      !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
+      Exra.tick(:timeout, state)
+    else
+      timeout
+    end
+
+    %{state | voted_for: nil,
+      term: their_term,
+      state: (if role == :learner, do: :learner, else: :follower),
+      timeout: timeout
+    }
   end
-  # Success
-  def handle_cast_2({:candidate, from, their_term, log_term, log_index}, state = %{term: _term, logs: [%{term: my_log_term, index: my_log_index} | _a]})
-    when their_term > state.term and (log_term > my_log_term or (log_term == my_log_term and log_index >= my_log_index))
+  defp maybe_step_down(_a, state) do
+    state
+  end
+
+
+  defp valid_term(their_term, my_term) when their_term >= my_term do
+    true
+  end
+  defp valid_term(_their_term, _my_term) do
+    false
+  end
+
+  defp not_voted(their_term, _from, state) when their_term > state.term do
+    true
+  end
+  defp not_voted(term, _from, %{voted_for: nil, term: term}) do
+    true
+  end
+  defp not_voted(term, from, %{voted_for: from, term: term}) do
+    true
+  end
+  defp not_voted(_, _, _) do
+    false
+  end
+
+  defp valid_logs(their_log_term, their_log_index, %{logs: [%{term: my_term, index: my_index} | _]})
+    when their_log_term > my_term or (their_log_term == my_term and their_log_index >= my_index)
   do
-    new_state = vote_for_candidate({from, true, their_term}, state)
-    {:noreply, new_state}
+    true
   end
-  # Invalid reject vote
-  def handle_cast_2({:candidate, from, their_term, _lt, _li}, state) do
-    new_state = vote_for_candidate({from, false, their_term}, state)
-    {:noreply, new_state}
-  end
+  defp valid_logs(_, _, %{logs: []}), do: raise "Shouldnt happen, empty logs, as there should always be a genesis log"
+  defp valid_logs(_, _, _), do: false
+
 
   def vote_for_candidate({from, success, term}, state) do
 
@@ -55,19 +75,18 @@ defmodule Exra.Candidate do
       success,
       term
     })
-    becoming_follower = term > state.term
 
-    timeout = if (success || becoming_follower) do
-      !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
-      Exra.tick(:timeout, state)
+    if success do
+      if state.timeout, do: Process.cancel_timer(state.timeout)
+      new_timeout = Exra.tick(:timeout, state)
+
+      %{state |
+        voted_for: from,
+        timeout: new_timeout
+      }
     else
-      state.timeout
+      state
     end
-
-    %{state | term: term, timeout: timeout,
-      voted_for: (if term > state.term, do: nil, else: state.voted_for) || (if success, do: from, else: nil),
-      state: (if becoming_follower, do: :follower, else: state.state)
-    }
   end
 
 end
