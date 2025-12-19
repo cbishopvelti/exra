@@ -1,4 +1,5 @@
 defmodule Exra.LogEntry do
+  require Logger
   require Exra
   @type t :: %__MODULE__{
     index: integer(),
@@ -14,7 +15,6 @@ defmodule Exra.LogEntry do
     type: :command
   ]
 
-  # Only call this on the leader
   def handle_cast({:append_from_user, command}, state = %{
     state: :leader,
     term: term,
@@ -29,6 +29,14 @@ defmodule Exra.LogEntry do
     }
     append_log(log, state)
   end
+  # Forward messages to the leader
+  def handle_cast(message = {:append_from_user, _}, state = %{
+    leader: leader
+  }) when not is_nil(leader) do
+    GenServer.cast(leader, message)
+    {:noreply, state}
+  end
+
   def handle_cast({:config_change, command}, state = %{
     state: :leader,
     term: term,
@@ -46,6 +54,23 @@ defmodule Exra.LogEntry do
     }
     append_log(log, state)
   end
+  # Forward messages to the leader
+  # def handle_cast(message = {:config_change, _}, state = %{
+  #   leader: leader
+  # }) when not is_nil(leader) do
+  #   # TODO, queue and wait for leader to submit
+  #   GenServer.cast(leader, message)
+  #   {:noreply, state}
+  # end
+  # def handle_cast(_message = {:config_change, _}, state = %{
+  #   state: :follower,
+  #   leader: nil
+  # }) do
+  #   Logger.warning("We're a follower, but don't know about any leaders, maybe no leader has been elected yet.")
+  #   {:noreply, state}
+  # end
+
+
   def handle_cast({:replicated, false, from}, state = %{state: :leader, next_indexes: next_indexes, logs: logs, term: term}) do
     # step back and send previous logs
     ni = (next_indexes |> Map.get(from)) - 1
@@ -64,7 +89,8 @@ defmodule Exra.LogEntry do
   end
   def handle_cast({:replicated, index, from}, state = %{
     state: :leader, next_indexes: next_indexes, logs: logs = [log | _],
-    match_indexes: match_indexes, committed_index: committed_index, nodes: nodes
+    match_indexes: match_indexes, committed_index: committed_index, nodes: nodes,
+    term: current_term
   }) do
     new_next_indexes = next_indexes |> Map.put(from, index + 1)
     new_match_indexes = match_indexes |> Map.put(from, index)
@@ -79,8 +105,22 @@ defmodule Exra.LogEntry do
     c_old_commit = [log.index | (c_old_new_match_indexes |> Map.values())] |> Exra.Utils.median()
     c_new_commit = [log.index | (c_new_new_match_indexes |> Map.values())] |> Exra.Utils.median()
 
-    new_committed_index = min(c_old_commit, c_new_commit)
-    nodes = if (!is_nil(c_log) and c_log.index <= new_committed_index) do # Config change is fully applied, so old nodes are no longer part of the cluster
+    calculated_index = min(c_old_commit, c_new_commit)
+    # 4. SAFETY CHECK: Only update commit index if:
+    #    a. It is larger than current committed_index
+    #    b. The log entry at that index belongs to the CURRENT TERM
+    #       (Raft Paper 5.4.2)
+    target_log = Enum.find(logs, fn l -> l.index == calculated_index end)
+
+    new_committed_index = if calculated_index > committed_index and target_log != nil and target_log.term == current_term do
+      calculated_index
+    else
+      committed_index
+    end
+
+
+
+    nodes = if (!is_nil(c_log) and c_log.index <= new_committed_index) do # Config change is fully committed, so old nodes are no longer part of the cluster
       nodes_removed(MapSet.difference(
         [self() | nodes] |> Enum.uniq() |> MapSet.new(),
         c_new |> MapSet.new()
@@ -173,7 +213,8 @@ defmodule Exra.LogEntry do
       voted_for: (if term > my_term, do: nil, else: state.voted_for),
       timeout: timeout,
       committed_index: committed_index,
-      nodes: c_new ++ c_old |> Enum.reject(fn (node) -> node == self()  end) |> Enum.uniq()
+      nodes: c_new ++ c_old |> Enum.reject(fn (node) -> node == self()  end) |> Enum.uniq(),
+      leader: from
     }}
   end
 
@@ -210,6 +251,18 @@ defmodule Exra.LogEntry do
         nodes: uncommitted_nodes |> Enum.reject(fn (node) -> node == self() end)
       }
     }
+  end
+
+  def handle_call(message = {:config_change, _}, _from, state = %{state: :leader}) do
+    GenServer.cast(self(), message)
+    {:reply, :ok, state}
+  end
+  def handle_call(message = {:config_change, _}, _from, state = %{leader: leader}) when not is_nil(leader) do
+    GenServer.cast(leader, message)
+    {:reply, :ok, state}
+  end
+  def handle_call({:config_change, _}, _from, state) do
+    {:reply, :no_leader, state}
   end
 
   # Retrieves the last log with configuration change

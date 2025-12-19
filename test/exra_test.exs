@@ -8,9 +8,9 @@ defmodule ExraTest do
 
   @tag leader: true
   test "3 nodes startup" do
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -36,9 +36,9 @@ defmodule ExraTest do
   test "leader split brain" do
     Mimic.set_mimic_global()
 
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -85,12 +85,19 @@ defmodule ExraTest do
     assert GenServer.call(pid1, :get_state).state == :leader
   end
 
+  # @tag leader: true
+  # test "Single node should instantly become leader" do
+  #   {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+
+  #   GenServer.call(pid1)
+  # end
+
   @tag logs: true
   test "Log replication" do
     Mimic.set_mimic_global()
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -132,9 +139,9 @@ defmodule ExraTest do
   @tag logs: true
   test "A down follower should catch up" do
     Mimic.set_mimic_global()
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -237,9 +244,9 @@ defmodule ExraTest do
 
   @tag config_change: true
   test "Add one node" do
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -250,7 +257,7 @@ defmodule ExraTest do
     assert_receive({:follower, ^pid2, _})
     assert_receive({:follower, ^pid3, _})
 
-    {:ok, pid4} = Exra.start_link(%{name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner})
+    {:ok, pid4} = Exra.start_link([name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner])
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
     assert_receive{:committed, _, [%{
       pid: ^pid4,
@@ -270,9 +277,9 @@ defmodule ExraTest do
   end
   @tag config_change: true
   test "Add one node with log entry" do
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -305,7 +312,7 @@ defmodule ExraTest do
 
     # IO.puts("-------------------------------")
 
-    {:ok, pid4} = Exra.start_link(%{name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner})
+    {:ok, pid4} = Exra.start_link([name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner])
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
     assert_receive{:committed, _, [%{
       pid: ^pid4,
@@ -334,9 +341,9 @@ defmodule ExraTest do
 
   @tag config_change: true
   test "remove one node inc log entry" do
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->
@@ -362,9 +369,9 @@ defmodule ExraTest do
 
   @tag config_change: true
   test "Remove the current leader" do
-    {:ok, pid1} = Exra.start_link(%{name: :n1, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid2} = Exra.start_link(%{name: :n2, init_nodes: [], auto_tick: false, subscriber: self()})
-    {:ok, pid3} = Exra.start_link(%{name: :n3, init_nodes: [], auto_tick: false, subscriber: self()})
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
 
     nodes = [pid1, pid2, pid3]
     nodes |> Enum.each(fn (node) ->

@@ -6,13 +6,24 @@ defmodule Exra do
   alias Exra.LogEntry
 
   def start_link(args) do
-    GenServer.start_link(__MODULE__, args, name: Map.get(args, :name, __MODULE__))
+    name = Keyword.get(args, :name, __MODULE__)
+
+    init_args = args
+    |> Enum.into(%{
+      init_nodes: []
+    })
+    |> Map.merge(%{
+      name: name
+    })
+
+    GenServer.start_link(__MODULE__, init_args, name: name)
   end
 
 
   defmacro get_quorum(nodes) do
     quote do
-      max(div(length(unquote(nodes)), 2) + 1, 2)
+      # max(div(length(unquote(nodes)), 2) + 1, 2)
+      div(length(unquote(nodes)), 2) + 1
     end
   end
 
@@ -33,7 +44,8 @@ defmodule Exra do
     match_indexes: %{},
     committed_index: integer(),
     applied_index: integer(),
-    subscriber: pid() | nil
+    subscriber: pid() | nil,
+    leader: pid() | nil
   }
 
   def init(args) do
@@ -62,20 +74,24 @@ defmodule Exra do
       match_indexes: %{},
       committed_index: 0,
       applied_index: 0,
-      subscriber: Map.get(args, :subscriber)
+      subscriber: Map.get(args, :subscriber),
+      leader: nil
     }
 
-    {:ok, state}
+    {:ok, %{state | timeout: tick(:timeout, state) }}
   end
 
 
+  # No nodes, so become leader
   def handle_info(:timeout, state = %{nodes: [], term: term}) do
+    # IO.puts(":timeout -----")
     !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
-    # No nodes, so become leader
     timeout = tick(:send_heartbeat, state)
     new_term = term + 1
     Exra.Utils.notify_state_machine(state, :leader, [new_term])
-    {:noreply, %{state | state: :leader, term: new_term, voted_for: nil, votes: 1, timeout: timeout}}
+    {:noreply, %{state | state: :leader, term: new_term, voted_for: nil,
+      votes: 1, timeout: timeout, leader: nil
+    }}
   end
   def handle_info(:timeout, state = %{logs: [log | _]}) do
 
@@ -93,7 +109,9 @@ defmodule Exra do
     timeout = tick(:timeout, state)
     # Process.send_after(self(), :timeout, Enum.random(state.timeout_min..state.timeout_max))
 
-    {:noreply, %{state | state: :candidate, term: new_term, votes: 1, voted_for: nil, timeout: timeout }}
+    {:noreply, %{state | state: :candidate, term: new_term, votes: 1,
+      voted_for: nil, timeout: timeout, leader: nil
+    }}
   end
 
   def handle_info(:send_heartbeat, state) do
@@ -135,7 +153,7 @@ defmodule Exra do
     send_heartbeat(term, state)
     timeout = tick(:send_heartbeat, state)
 
-    broadcast_from({:follower, term}, state)
+    broadcast_from({:follower, term, self()}, state)
     Exra.Utils.notify_state_machine(state, :leader, [term])
 
     # We've won the vote, become the leader.
@@ -164,11 +182,11 @@ defmodule Exra do
     {:noreply, %{state | timeout: nil }}
   end
   # Tell everyone they're a follower
-  def handle_cast({:follower, term}, state) do
+  def handle_cast({:follower, term, from}, state) do
     Exra.Utils.notify_state_machine(state, :follower, [term])
-    {:noreply, state}
+    {:noreply, %{state | leader: from}}
   end
-  def handle_cast({:stale, term}, state) do
+  def handle_cast({:stale, term, from}, state) do
     !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
     timeout = Exra.tick(:timeout, state)
 
@@ -176,7 +194,8 @@ defmodule Exra do
       state: :follower,
       voted_for: nil,
       term: term,
-      timeout: timeout
+      timeout: timeout,
+      leader: from
     }}
   end
   def handle_cast({:removed, by}, state = %{timeout: timeout}) do
@@ -184,6 +203,8 @@ defmodule Exra do
     # !is_nil(subscriber) && send(subscriber, {:removed, self(), by})
     Exra.Utils.notify_state_machine(state, :removed, [by])
 
+    IO.puts("exra stop")
+    Logger.warning("Process stopped")
     {:stop, :normal, state}
     # {:noreply, %{state |
     #   timeout: nil
@@ -226,6 +247,7 @@ defmodule Exra do
 
     {:reply, :ok, state}
   end
+  def handle_call(message = {:config_change, _}, from, state), do: Exra.LogEntry.handle_call(message, from, state)
 
   def tick(:timeout, state = %{auto_tick: true}) do
     Process.send_after(self(), :timeout, Enum.random(state.timeout_min..state.timeout_max))
