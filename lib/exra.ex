@@ -49,7 +49,6 @@ defmodule Exra do
   }
 
   def init(args) do
-
     state = %{
       name: args.name,
       pid: self(),
@@ -63,7 +62,9 @@ defmodule Exra do
       nodes: args.init_nodes,
       timeout: nil,
       auto_tick: Map.get(args, :auto_tick, true),
-      state_machine: Map.get(args, :state_machine, nil) |> then(&(&1 && Code.ensure_loaded!(&1))),
+      state_machine: Map.get(args, :state_machine,
+        Application.get_env(:exra, :state_machine)
+      ) |> then(&(&1 && Code.ensure_loaded!(&1))),
       logs: [%{
         index: 0,
         term: 0,
@@ -78,6 +79,10 @@ defmodule Exra do
       leader: nil
     }
 
+    # if state.state == :follower do
+    #   Exra.Utils.notify_state_machine(state, :follower, [state.term, length(state.nodes) + 1])
+    # end
+
     {:ok, %{state | timeout: tick(:timeout, state) }}
   end
 
@@ -88,7 +93,7 @@ defmodule Exra do
     !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
     timeout = tick(:send_heartbeat, state)
     new_term = term + 1
-    Exra.Utils.notify_state_machine(state, :leader, [new_term])
+    Exra.Utils.notify_state_machine(state, :leader, [new_term, 1])
     {:noreply, %{state | state: :leader, term: new_term, voted_for: nil,
       votes: 1, timeout: timeout, leader: nil
     }}
@@ -153,8 +158,8 @@ defmodule Exra do
     send_heartbeat(term, state)
     timeout = tick(:send_heartbeat, state)
 
-    broadcast_from({:follower, term, self()}, state)
-    Exra.Utils.notify_state_machine(state, :leader, [term])
+    # broadcast_from({:follower, term, self()}, state)
+    Exra.Utils.notify_state_machine(state, :leader, [term, length(nodes) + 1])
 
     # We've won the vote, become the leader.
     {:noreply, %{state | votes: votes + 1, state: :leader, timeout: timeout}}
@@ -181,9 +186,9 @@ defmodule Exra do
     send(self(), message)
     {:noreply, %{state | timeout: nil }}
   end
-  # Tell everyone they're a follower
-  def handle_cast({:follower, term, from}, state) do
-    Exra.Utils.notify_state_machine(state, :follower, [term])
+  # Tell state_machine they're a follower
+  def handle_cast({:follower, term, from}, state = %{nodes: nodes}) do
+    Exra.Utils.notify_state_machine(state, :follower, [term, length(nodes) + 1])
     {:noreply, %{state | leader: from}}
   end
   def handle_cast({:stale, term, from}, state) do
@@ -203,7 +208,6 @@ defmodule Exra do
     # !is_nil(subscriber) && send(subscriber, {:removed, self(), by})
     Exra.Utils.notify_state_machine(state, :removed, [by])
 
-    IO.puts("exra stop")
     Logger.warning("Process stopped")
     {:stop, :normal, state}
     # {:noreply, %{state |
@@ -250,9 +254,11 @@ defmodule Exra do
   def handle_call(message = {:config_change, _}, from, state), do: Exra.LogEntry.handle_call(message, from, state)
 
   def tick(:timeout, state = %{auto_tick: true}) do
+    # IO.puts("tick :timeout")
     Process.send_after(self(), :timeout, Enum.random(state.timeout_min..state.timeout_max))
   end
   def tick(:send_heartbeat, state = %{auto_tick: true}) do
+    # IO.puts("tick :send_heartbeat")
     Process.send_after(self(), :send_heartbeat, state.ping_interval)
   end
   def tick(_message, _state = %{auto_tick: false}) do

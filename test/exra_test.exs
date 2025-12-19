@@ -72,7 +72,7 @@ defmodule ExraTest do
 
     send(pid2, :timeout)
     assert_receive({:leader, ^pid2, _})
-    assert_receive({:follower, ^pid3, _})
+    # assert_receive({:follower, ^pid3, _}) # We where already a leader, so this wont be called
 
     GenServer.call(pid2, :get_state)
     GenServer.call(pid3, :get_state)

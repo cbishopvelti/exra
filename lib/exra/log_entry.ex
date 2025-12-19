@@ -54,22 +54,6 @@ defmodule Exra.LogEntry do
     }
     append_log(log, state)
   end
-  # Forward messages to the leader
-  # def handle_cast(message = {:config_change, _}, state = %{
-  #   leader: leader
-  # }) when not is_nil(leader) do
-  #   # TODO, queue and wait for leader to submit
-  #   GenServer.cast(leader, message)
-  #   {:noreply, state}
-  # end
-  # def handle_cast(_message = {:config_change, _}, state = %{
-  #   state: :follower,
-  #   leader: nil
-  # }) do
-  #   Logger.warning("We're a follower, but don't know about any leaders, maybe no leader has been elected yet.")
-  #   {:noreply, state}
-  # end
-
 
   def handle_cast({:replicated, false, from}, state = %{state: :leader, next_indexes: next_indexes, logs: logs, term: term}) do
     # step back and send previous logs
@@ -118,13 +102,17 @@ defmodule Exra.LogEntry do
       committed_index
     end
 
-
-
     nodes = if (!is_nil(c_log) and c_log.index <= new_committed_index) do # Config change is fully committed, so old nodes are no longer part of the cluster
       nodes_removed(MapSet.difference(
         [self() | nodes] |> Enum.uniq() |> MapSet.new(),
         c_new |> MapSet.new()
       ) |> MapSet.to_list())
+      nodes_added(
+        MapSet.difference(
+          c_new |> MapSet.new(),
+          [self() | nodes] |> Enum.uniq() |> MapSet.new()
+        )
+      )
       c_new
     else
       nodes
@@ -166,13 +154,22 @@ defmodule Exra.LogEntry do
     !is_nil(timeout) && Process.cancel_timer(timeout)
     timeout = Exra.tick(:timeout, state)
 
-    state = if term >= state.term and state.state != :follower do
+    # state = if term >= state.term and (state.state != :follower or state.term == 0) do
+    state = if term >= state.term do
         new_state = %{state | state: :follower, term: term, voted_for: (if term > state.term, do: nil, else: state.voted_for)}
-        Exra.Utils.notify_state_machine(state, :follower, [term])
+        if (my_term == 0 or state.state != :follower) do
+          Exra.Utils.notify_state_machine(state, :follower, [term, length(state.nodes) + 1])
+        end
         new_state
     else
         state
     end
+
+    # We where initiated as a follower, so no notification was sent, now we know we're a follower so notify
+    # if term >= state.term and state.state == :follower and state.term == 0 do
+    #   if (state.name == :n2), do: IO.puts("103")
+    #   Exra.Utils.notify_state_machine(state, :follower, [term, length(state.nodes) + 1])
+    # end
 
     previous_index = previous_log.index
 
@@ -253,13 +250,18 @@ defmodule Exra.LogEntry do
     }
   end
 
-  def handle_call(message = {:config_change, _}, _from, state = %{state: :leader}) do
-    GenServer.cast(self(), message)
-    {:reply, :ok, state}
+  def handle_call(message = {:config_change, _}, _from, state = %{state: :leader, nodes: nodes, logs: logs, committed_index: committed_index}) do
+    {_old, _new, log} = get_config_nodes(nodes, logs |> Enum.take_while(fn (%{index: index}) -> index > committed_index end))
+    case log do
+      nil ->
+        GenServer.cast(self(), message)
+        {:reply, :ok, state}
+      _log ->
+        {:reply, :config_change_in_progress, state}
+    end
   end
   def handle_call(message = {:config_change, _}, _from, state = %{leader: leader}) when not is_nil(leader) do
-    GenServer.cast(leader, message)
-    {:reply, :ok, state}
+    {:reply, GenServer.call(state.leader, message, 512), state}
   end
   def handle_call({:config_change, _}, _from, state) do
     {:reply, :no_leader, state}
@@ -284,6 +286,9 @@ defmodule Exra.LogEntry do
     |> Enum.each(fn (node) ->
       GenServer.cast(node, {:removed, self()})
     end)
+  end
+  # added nodes will be followers, atleast initially.
+  def nodes_added(_nodes) do
   end
 
   def append_log(log, state = %{

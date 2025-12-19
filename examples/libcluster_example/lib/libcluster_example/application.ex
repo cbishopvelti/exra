@@ -1,4 +1,4 @@
-defmodule Libcluster.Application do
+defmodule LibclusterExample.Application do
   # See https://hexdocs.pm/elixir/Application.html
   # for more information on OTP Applications
   @moduledoc false
@@ -10,9 +10,11 @@ defmodule Libcluster.Application do
     topologies = [
       epmd_example: [
         strategy: Cluster.Strategy.Epmd,
-        config: [hosts: [:"a@127.0.0.1", :"b@127.0.0.1"]],
+        config: [hosts: [:"a@127.0.0.1", :"b@127.0.0.1", :"c@127.0.0.1"]],
       ]
     ]
+
+    IO.inspect(Application.get_all_env(:libcluster_example), label: "601")
 
     children = [
       {Cluster.Supervisor, [topologies, [name: Libcluster.ClusterSupervisor]]},

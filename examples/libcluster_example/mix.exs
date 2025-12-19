@@ -15,7 +15,7 @@ defmodule Libcluster.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {Libcluster.Application, []}
+      mod: {LibclusterExample.Application, []}
     ]
   end
 

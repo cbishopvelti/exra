@@ -28,18 +28,17 @@ defmodule Exra.ClusterObserver do
     their_pid = :rpc.call(node, Process, :whereis, [Exra])
     exra_state = my_pid |> GenServer.call(:get_state)
     case GenServer.call(my_pid, {:config_change, {[my_pid | exra_state.nodes], [ their_pid, my_pid | exra_state.nodes] }}) do
-      :ok -> nil
+      :ok ->
+        Logger.debug(":Config change :ok")
+        nil
+      :config_change_in_progress ->
+        Logger.debug("Config change in progress, retrying in 128ms")
+        Process.send_after(self(), {:nodeup, node}, 128)
       :no_leader ->
         Logger.debug("No leader, retrying in 256ms")
         Process.send_after(self(), {:nodeup, node}, 256)
     end
 
-    my_pid |> GenServer.call(:get_state) |> IO.inspect(label: "001 my")
-    their_pid |> GenServer.call(:get_state) |> IO.inspect(label: "002 their")
-
-    {:noreply, state}
-  end
-  def handle_info({:nodeup, _node}, state) do
     {:noreply, state}
   end
 

@@ -21,6 +21,13 @@ defmodule Exra.Candidate do
 
   defp maybe_step_down(their_term, state = %{term: my_term, state: role, timeout: timeout}) when their_term > my_term do
 
+    new_role = (if role == :learner, do: :learner, else: :follower)
+
+    # We have just become or where initiated as a follower, so notify.
+    if (my_term == 0 or state.state != new_role) do
+      Exra.Utils.notify_state_machine(state, :follower, [their_term, length(state.nodes) + 1])
+    end
+
     timeout = if (role !== :learner) do
       !is_nil(state.timeout) && Process.cancel_timer(state.timeout)
       Exra.tick(:timeout, state)
@@ -30,7 +37,7 @@ defmodule Exra.Candidate do
 
     %{state | voted_for: nil,
       term: their_term,
-      state: (if role == :learner, do: :learner, else: :follower),
+      state: new_role,
       timeout: timeout
     }
   end
