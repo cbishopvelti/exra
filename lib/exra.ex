@@ -208,7 +208,7 @@ defmodule Exra do
     # !is_nil(subscriber) && send(subscriber, {:removed, self(), by})
     Exra.Utils.notify_state_machine(state, :removed, [by])
 
-    Logger.warning("Process stopped")
+    Logger.warning("Process stopped #{inspect{state.nodes}}")
     {:stop, :normal, state}
     # {:noreply, %{state |
     #   timeout: nil
@@ -266,8 +266,9 @@ defmodule Exra do
   end
 
   def broadcast_from(message, state) do
+    # IO.inspect(state.nodes, label: "002 broadcast_from")
     state.nodes
-    |> Enum.filter(fn (node) -> node != self() end )
+    |> Enum.reject(fn (pid) -> Exra.Utils.is_self?(pid) end )
     |> Enum.each(fn (node) ->
       GenServer.cast(node, message)
     end)

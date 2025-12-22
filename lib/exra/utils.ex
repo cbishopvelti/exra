@@ -12,4 +12,17 @@ defmodule Exra.Utils do
     end
     !is_nil(subscriber) && send(subscriber, {function, self(), args})
   end
+
+  def is_self?(pid) when is_pid(pid), do: pid == self()
+  def is_self?({name, node}), do: node == node() and Process.whereis(name) == self()
+  def is_self?(_), do: false
+
+  def resolve_pid(pid) when is_pid(pid), do: pid
+  def resolve_pid({name, node}) when node == node() do
+    Process.whereis(name)
+  end
+  def resolve_pid({name, node}) do
+    # Perform a Remote Procedure Call to look up the name on the remote node
+    :rpc.call(node, Process, :whereis, [name])
+  end
 end

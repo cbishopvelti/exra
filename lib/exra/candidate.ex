@@ -1,4 +1,5 @@
 defmodule Exra.Candidate do
+require Logger
 
   def handle_cast( {:candidate, from, their_term, their_log_term, their_log_index}, state) do
     state = %{term: my_term, nodes: nodes, state: role} = maybe_step_down(their_term, state)
@@ -20,7 +21,7 @@ defmodule Exra.Candidate do
   end
 
   defp maybe_step_down(their_term, state = %{term: my_term, state: role, timeout: timeout}) when their_term > my_term do
-
+    Logger.debug("Candidate.maybe_step_down")
     new_role = (if role == :learner, do: :learner, else: :follower)
 
     # We have just become or where initiated as a follower, so notify.

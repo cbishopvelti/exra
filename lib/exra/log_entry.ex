@@ -42,6 +42,7 @@ defmodule Exra.LogEntry do
     term: term,
     logs: logs
   }) do
+    Logger.debug("LogEntry :config_change")
     log = %{
       term: term,
       index: hd(logs).index + 1,
@@ -50,14 +51,20 @@ defmodule Exra.LogEntry do
     }
 
     state = %{state |
-      nodes: MapSet.union(state.nodes |> MapSet.new(), command |> elem(1) |> MapSet.new()) |> MapSet.to_list() |> Enum.reject(fn (node) -> node == self() end)
+      nodes: MapSet.union(
+        state.nodes |> MapSet.new(),
+        command |> elem(1) |> MapSet.new()) |> MapSet.to_list() |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
     }
     append_log(log, state)
   end
 
-  def handle_cast({:replicated, false, from}, state = %{state: :leader, next_indexes: next_indexes, logs: logs, term: term}) do
+  # We're a follower, so we don't have the authority to do anything
+  # def handle_cast({:replicated, _, _}, state = %{state: :follower}) do
+  #   {:noreply, state}
+  # end
+  def handle_cast({:replicated, false, from}, state = %{state: :leader, next_indexes: next_indexes, logs: logs, term: term, committed_index: committed_index}) do
     # step back and send previous logs
-    ni = (next_indexes |> Map.get(from)) - 1
+    ni = (next_indexes |> Map.get(from, 1)) - 1
     new_next_indexes = next_indexes |> Map.put(from, ni)
 
     node = from
@@ -67,7 +74,7 @@ defmodule Exra.LogEntry do
     GenServer.cast(node, {:replicate, logs_to_send, %{
       index: previous_log.index,
       term: previous_log.term
-    }, self(), term})
+    }, self(), term, committed_index})
 
     {:noreply, %{state | next_indexes: new_next_indexes }}
   end
@@ -76,6 +83,7 @@ defmodule Exra.LogEntry do
     match_indexes: match_indexes, committed_index: committed_index, nodes: nodes,
     term: current_term
   }) do
+    # IO.puts("004 :replicated #{index} #{inspect(from)}")
     new_next_indexes = next_indexes |> Map.put(from, index + 1)
     new_match_indexes = match_indexes |> Map.put(from, index)
 
@@ -103,13 +111,25 @@ defmodule Exra.LogEntry do
     end
 
     nodes = if (!is_nil(c_log) and c_log.index <= new_committed_index) do # Config change is fully committed, so old nodes are no longer part of the cluster
+      IO.inspect([self() | nodes], label: "005 checking remove nodes")
+      IO.inspect(c_new, label: "005.2 new_nodes")
       nodes_removed(MapSet.difference(
         [self() | nodes] |> Enum.uniq() |> MapSet.new(),
-        c_new |> MapSet.new()
+        c_new |> Enum.map(fn (node) ->
+          case Exra.Utils.is_self?(node) do
+            true -> self() # convert {Exra, a@127.0.0.1} to pid
+            false -> node
+          end
+        end) |> MapSet.new()
       ) |> MapSet.to_list())
       nodes_added(
         MapSet.difference(
-          c_new |> MapSet.new(),
+          c_new |> Enum.map(fn (node) ->
+            case Exra.Utils.is_self?(node) do
+              true -> self() # convert {Exra, a@127.0.0.1} to pid
+              false -> node
+            end
+          end) |> MapSet.new(),
           [self() | nodes] |> Enum.uniq() |> MapSet.new()
         )
       )
@@ -144,13 +164,14 @@ defmodule Exra.LogEntry do
 
   # Replicate/heartbeat
   def handle_cast({:replicate, _logs, _previous_log, from, term, _committed_index}, state = %{state: :follower, logs: _my_logs, term: my_term}) when term < my_term do
+    IO.puts("002.1 replicate")
     GenServer.cast(from, {:stale, my_term})
     {:noreply, state}
   end
   def handle_cast({:replicate, logs, previous_log, from, term, committed_index}, state = %{state: my_state, logs: my_logs, term: my_term,
     timeout: timeout, committed_index: my_committed_index})
   do
-
+    # IO.puts("002.2 replicate #{inspect(logs)}, #{committed_index}")
     !is_nil(timeout) && Process.cancel_timer(timeout)
     timeout = Exra.tick(:timeout, state)
 
@@ -210,7 +231,7 @@ defmodule Exra.LogEntry do
       voted_for: (if term > my_term, do: nil, else: state.voted_for),
       timeout: timeout,
       committed_index: committed_index,
-      nodes: c_new ++ c_old |> Enum.reject(fn (node) -> node == self()  end) |> Enum.uniq(),
+      nodes: c_new ++ c_old |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node)  end) |> Enum.uniq(),
       leader: from
     }}
   end
@@ -245,7 +266,7 @@ defmodule Exra.LogEntry do
     {:noreply,
       %{state |
         committed_index: new_committed_index,
-        nodes: uncommitted_nodes |> Enum.reject(fn (node) -> node == self() end)
+        nodes: uncommitted_nodes |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
       }
     }
   end
@@ -261,6 +282,7 @@ defmodule Exra.LogEntry do
     end
   end
   def handle_call(message = {:config_change, _}, _from, state = %{leader: leader}) when not is_nil(leader) do
+    IO.inspect(state, label: "LogEntry :config_change")
     {:reply, GenServer.call(state.leader, message, 512), state}
   end
   def handle_call({:config_change, _}, _from, state) do
@@ -303,11 +325,12 @@ defmodule Exra.LogEntry do
     new_logs = [log | logs]
 
     nodes
-    |> Enum.filter(fn (node) -> node != self() end)
+    |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
     |> Enum.map(fn (node) ->
       next_index = Map.get(next_indexes, node, 1)
       logs_to_send = Enum.take_while(new_logs, fn (%{index: index}) -> index >= next_index end)
       previous_log = Enum.find(logs, fn %{index: index} -> index == (next_index - 1) end)
+
 
       GenServer.cast(node, {:replicate, logs_to_send, %{
         index: previous_log.index,
@@ -317,11 +340,12 @@ defmodule Exra.LogEntry do
 
     # Ensure match indexes exist for all nodes except myself
     match_indexes = nodes
-    |> Enum.filter(fn (node) -> node != self() end)
+    |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
     |> Enum.reduce(match_indexes, fn (node, acc) ->
-      case acc |> Map.has_key?(node) do
+      pid = Exra.Utils.resolve_pid(node)
+      case is_nil(pid) || acc |> Map.has_key?(pid) do
         true -> acc
-        false -> acc |> Map.put(node, 0)
+        false -> acc |> Map.put(pid, 0)
       end
     end)
 

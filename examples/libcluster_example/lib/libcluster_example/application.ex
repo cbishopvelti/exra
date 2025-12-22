@@ -14,8 +14,6 @@ defmodule LibclusterExample.Application do
       ]
     ]
 
-    IO.inspect(Application.get_all_env(:libcluster_example), label: "601")
-
     children = [
       {Cluster.Supervisor, [topologies, [name: Libcluster.ClusterSupervisor]]},
     ]
