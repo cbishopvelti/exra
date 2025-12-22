@@ -351,8 +351,11 @@ defmodule Exra.LogEntry do
     # Ensure match indexes exist for all nodes except myself
     match_indexes = nodes
     |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
-    |> Enum.reduce(match_indexes, fn (node, acc) ->
-      pid = Exra.Utils.resolve_pid(node)
+    |> Enum.map(fn node ->
+      Task.async(fn -> Exra.Utils.resolve_pid(node) end)
+    end)
+    |> Task.await_many()
+    |> Enum.reduce(match_indexes, fn (pid, acc) ->
       case is_nil(pid) || acc |> Map.has_key?(pid) do
         true -> acc
         false -> acc |> Map.put(pid, 0)
