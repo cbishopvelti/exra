@@ -23,6 +23,9 @@ defmodule Exra.Utils do
   end
   def resolve_pid({name, node}) do
     # Perform a Remote Procedure Call to look up the name on the remote node
-    :rpc.call(node, Process, :whereis, [name])
+    case :rpc.call(node, Process, :whereis, [name], 50) do
+      x when is_pid(x) -> x
+      _ -> nil # Failed getting the pid, so just return nil
+    end
   end
 end

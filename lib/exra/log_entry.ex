@@ -111,8 +111,6 @@ defmodule Exra.LogEntry do
     end
 
     nodes = if (!is_nil(c_log) and c_log.index <= new_committed_index) do # Config change is fully committed, so old nodes are no longer part of the cluster
-      IO.inspect([self() | nodes], label: "005 checking remove nodes")
-      IO.inspect(c_new, label: "005.2 new_nodes")
       nodes_removed(MapSet.difference(
         [self() | nodes] |> Enum.uniq() |> MapSet.new(),
         c_new |> Enum.map(fn (node) ->
@@ -156,15 +154,18 @@ defmodule Exra.LogEntry do
         nil
     end
 
-
     {:noreply, %{state | next_indexes: new_next_indexes, match_indexes: new_match_indexes, committed_index: new_committed_index,
       nodes:  nodes |> Enum.filter(fn (node) -> node != self() end)
     }}
   end
 
+  def handle_cast({:replicated, _index, _from}, state) do
+    Logger.warning(":replicated, recieved message when not leader")
+    {:noreply, state}
+  end
+
   # Replicate/heartbeat
   def handle_cast({:replicate, _logs, _previous_log, from, term, _committed_index}, state = %{state: :follower, logs: _my_logs, term: my_term}) when term < my_term do
-    IO.puts("002.1 replicate")
     GenServer.cast(from, {:stale, my_term})
     {:noreply, state}
   end
@@ -185,12 +186,6 @@ defmodule Exra.LogEntry do
     else
         state
     end
-
-    # We where initiated as a follower, so no notification was sent, now we know we're a follower so notify
-    # if term >= state.term and state.state == :follower and state.term == 0 do
-    #   if (state.name == :n2), do: IO.puts("103")
-    #   Exra.Utils.notify_state_machine(state, :follower, [term, length(state.nodes) + 1])
-    # end
 
     previous_index = previous_log.index
 
@@ -219,10 +214,11 @@ defmodule Exra.LogEntry do
     end
 
     # Ensure we have all the nodes
-    { c_old, c_new, _c_log} = get_config_nodes(
-      state.nodes,
-      new_logs |> Enum.take_while(fn (%{index: index}) -> index > committed_index end)
+    {c_old, c_new, _c_log} = get_config_nodes_v2(state.nodes,
+      committed_index,
+      state.logs
     )
+
 
     {:noreply, %{state |
       logs: new_logs,
@@ -231,7 +227,7 @@ defmodule Exra.LogEntry do
       voted_for: (if term > my_term, do: nil, else: state.voted_for),
       timeout: timeout,
       committed_index: committed_index,
-      nodes: c_new ++ c_old |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node)  end) |> Enum.uniq(),
+      nodes: (c_new ++ c_old) |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node)  end) |> Enum.uniq(),
       leader: from
     }}
   end
@@ -248,25 +244,12 @@ defmodule Exra.LogEntry do
     else
     end
 
-    { _c_old, c_new_committed, c_logs_committed} = get_config_nodes(
-      state.nodes,
-      logs
-      |> Enum.take_while(fn (%{index: index}) -> index > old_committed_index end)
-      |> Enum.drop_while(fn (%{index: index}) -> index > new_committed_index end)
-    )
-    committed_nodes = (if (!is_nil(c_logs_committed)), do: c_new_committed, else: state.nodes)
-
-    { c_old_uncommitted, c_new_uncommitted, c_log} = get_config_nodes(
-      state.nodes,
-      logs
-      |> Enum.take_while(fn (%{index: index}) -> index > new_committed_index end)
-    )
-    uncommitted_nodes = (if (!is_nil(c_log)), do: (c_new_uncommitted ++ c_old_uncommitted) |> Enum.uniq(), else: committed_nodes)
+    {old_nodes, new_nodes, _log} = get_config_nodes_v2(state.nodes, new_committed_index, logs)
 
     {:noreply,
       %{state |
         committed_index: new_committed_index,
-        nodes: uncommitted_nodes |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
+        nodes: (old_nodes ++ new_nodes) |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
       }
     }
   end
@@ -282,7 +265,7 @@ defmodule Exra.LogEntry do
     end
   end
   def handle_call(message = {:config_change, _}, _from, state = %{leader: leader}) when not is_nil(leader) do
-    IO.inspect(state, label: "LogEntry :config_change")
+    # IO.inspect(state, label: "LogEntry :config_change")
     {:reply, GenServer.call(state.leader, message, 512), state}
   end
   def handle_call({:config_change, _}, _from, state) do
@@ -301,6 +284,33 @@ defmodule Exra.LogEntry do
     else
       {log.command |> elem(0), log.command |> elem(1), log}
     end
+  end
+
+  def get_config_nodes_v2(nodes, committed_index, logs) do
+    uncommitted_log = logs
+    |> Enum.take_while(fn (%{index: index}) -> index > committed_index end)
+    |> Enum.find(fn
+      (%{type: :config_change, command: {_a, _b}}) -> true
+      _ -> false
+    end)
+
+    case uncommitted_log do
+      nil ->
+        committed_log = logs
+        |> Enum.drop_while(fn (%{index: index}) -> index > committed_index end)
+        |> Enum.find(fn
+          (%{type: :config_change, command: {_a, _b}}) -> true
+          _ -> false
+        end)
+        case committed_log do
+          nil -> {nodes, [], nil}
+          log -> {log.command |> elem(1), [], nil}
+        end
+
+      log ->
+        {log.command |> elem(0), log.command |> elem(1), log}
+    end
+
   end
 
   def nodes_removed(nodes) do

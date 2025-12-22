@@ -2,26 +2,35 @@ defmodule Exra.Candidate do
 require Logger
 
   def handle_cast( {:candidate, from, their_term, their_log_term, their_log_index}, state) do
-    state = %{term: my_term, nodes: nodes, state: role} = maybe_step_down(their_term, state)
+    state = %{term: my_term, state: role} = maybe_step_down(their_term, state)
 
-    with {:in_our_cluster, true} <- {:in_our_cluster, from in nodes},
-      {:can_vote, true} <- {:can_vote, role in [:follower]},
+    with {:in_our_cluster, true} <- {:in_our_cluster, in_our_cluster(from, state)},
+      {:can_vote, true} <- {:can_vote, role in [:follower]},\
       {:valid_term, true} <- {:valid_term, valid_term(their_term,  my_term)},
       {:not_voted, true} <- {:not_voted, not_voted(their_term, from, state)},
       {:valid_logs, true} <- {:valid_logs, valid_logs(their_log_term, their_log_index, state)}
-
     do
       new_state = vote_for_candidate({from, true, their_term}, state)
       {:noreply, new_state}
     else
-      {_, false } ->
+      {err, false } ->
+        Logger.debug(":candidate rejecting vote, #{err}")
         new_state = vote_for_candidate({from, false, max(their_term, my_term)}, state)
         {:noreply, new_state}
     end
   end
 
+  defp in_our_cluster(from, _state = %{nodes: nodes}) do
+    out = from in (nodes
+      |> Enum.map(fn node ->
+        Task.async(fn -> Exra.Utils.resolve_pid(node) end)
+      end)
+      |> Task.await_many())
+    out
+  end
+
   defp maybe_step_down(their_term, state = %{term: my_term, state: role, timeout: timeout}) when their_term > my_term do
-    Logger.debug("Candidate.maybe_step_down")
+    Logger.debug("Candidate.maybe_step_down my_term: #{my_term}, their_term: #{their_term}")
     new_role = (if role == :learner, do: :learner, else: :follower)
 
     # We have just become or where initiated as a follower, so notify.

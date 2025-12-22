@@ -111,6 +111,8 @@ defmodule Exra do
       log.index
     }, state)
 
+    Logger.debug(":timeout happened, becoming candidate #{new_term}")
+
     timeout = tick(:timeout, state)
     # Process.send_after(self(), :timeout, Enum.random(state.timeout_min..state.timeout_max))
 
@@ -165,17 +167,19 @@ defmodule Exra do
     {:noreply, %{state | votes: votes + 1, state: :leader, timeout: timeout}}
   end
   def handle_cast({:vote, true, term}, state = %{term: term, state: :candidate, votes: votes}) do
-    Logger.debug("I've received a vote", [term: term, name: state.name])
+    Logger.debug(":vote received a vote", [term: term, name: state.name])
     {:noreply, %{state| votes: votes + 1}}
   end
   def handle_cast({:vote, false, term}, state = %{term: my_term}) when term > my_term do
+    Logger.debug(":vote, received rejected vote")
     {:noreply, %{state |
       state: :follower,
       term: term,
       voted_for: nil
     }}
   end
-  def handle_cast({:vote, _a, _b}, state) do
+  def handle_cast({:vote, _a, term}, state = %{term: my_term}) do
+    Logger.debug(":vote has finished or received rejected vote, their_term: #{term}, my_term: #{my_term}")
     # Voting has finished.
     {:noreply, state}
   end

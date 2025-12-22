@@ -49,8 +49,8 @@ defmodule Exra.ClusterObserver do
           Logger.debug(":Config change :ok")
           nil
         :config_change_in_progress ->
-          Logger.debug("Config change in progress, retrying in 1m # 128ms")
-          Process.send_after(self(), {:nodeup, node}, 60_000)
+          Logger.debug("Config change in progress, retrying in 128ms")
+          Process.send_after(self(), {:nodeup, node}, 128)
         :no_leader ->
           Logger.debug("No leader, retrying in 256ms")
           Process.send_after(self(), {:nodeup, node}, 256)
