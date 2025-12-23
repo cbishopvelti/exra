@@ -80,16 +80,17 @@ defmodule LogCompactionTest do
     {:ok, pid4} = Exra.start_link([name: :n4, init_nodes: [], auto_tick: false, subscriber: self(), state: :learner])
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
 
-    # Wait for commit
-    assert_receive({:committed, _, _}, 5000)
+    # Wait for commit of index 5 (Config Change Add)
+    assert_receive({:committed, _, [%{new_committed_index: idx}]}) when idx >= 5
 
     # This should have added a config change log.
-    state = GenServer.call(pid1, :get_state)
+    _state = GenServer.call(pid1, :get_state)
     # New log added.
 
     # Trigger another config change (remove pid4)
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3]})
-    assert_receive({:committed, _, _}, 5000)
+    # Wait for commit of index 6 (Config Change Remove)
+    assert_receive({:committed, _, [%{new_committed_index: idx}]}) when idx >= 6
 
     # Now verify logs
     state = GenServer.call(pid1, :get_state)
