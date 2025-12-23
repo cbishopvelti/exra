@@ -1,6 +1,7 @@
 defmodule LogCompactionTest do
   use ExUnit.Case
 
+  @tag only: true
   @tag compaction: true
   test "Log compaction deduplicates commands and config changes" do
     # Enable log compaction
@@ -81,7 +82,7 @@ defmodule LogCompactionTest do
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
 
     # Wait for commit of index 5 (Config Change Add)
-    assert_receive({:committed, _, [%{new_committed_index: idx}]}) when idx >= 5
+    assert_receive({:committed, _, [%{new_committed_index: 5}]})
 
     # This should have added a config change log.
     _state = GenServer.call(pid1, :get_state)
@@ -90,7 +91,7 @@ defmodule LogCompactionTest do
     # Trigger another config change (remove pid4)
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3]})
     # Wait for commit of index 6 (Config Change Remove)
-    assert_receive({:committed, _, [%{new_committed_index: idx}]}) when idx >= 6
+    assert_receive({:committed, _, [%{new_committed_index: 6}]})
 
     # Now verify logs
     state = GenServer.call(pid1, :get_state)
