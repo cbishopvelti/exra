@@ -140,7 +140,7 @@ defmodule Exra.LogEntry do
       true ->
 
         nodes
-        |> Enum.filter(fn (node) -> node != self() end)
+        |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
         |> Enum.each(fn (node) ->
           GenServer.cast(node, {:committed_index, new_committed_index})
         end)
