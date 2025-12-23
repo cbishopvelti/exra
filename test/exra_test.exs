@@ -242,6 +242,27 @@ defmodule ExraTest do
     assert GenServer.call(pid3, :get_state).logs |> length == 4
   end
 
+  @tag logs: true
+  test "Handle log call" do
+    Mimic.set_mimic_global()
+    {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid2} = Exra.start_link([name: :n2, init_nodes: [], auto_tick: false, subscriber: self()])
+    {:ok, pid3} = Exra.start_link([name: :n3, init_nodes: [], auto_tick: false, subscriber: self()])
+
+    nodes = [pid1, pid2, pid3]
+    nodes |> Enum.each(fn (node) ->
+      node |> GenServer.cast({:init_set_nodes, nodes})
+    end)
+
+    send(pid1, :timeout)
+    assert_receive({:leader, ^pid1, _})
+    assert_receive({:follower, ^pid2, _})
+    assert_receive({:follower, ^pid3, _})
+
+    result = GenServer.call(pid2, {:command, "Command"})
+    assert result == :ok
+  end
+
   @tag config_change: true
   test "Add one node" do
     {:ok, pid1} = Exra.start_link([name: :n1, init_nodes: [], auto_tick: false, subscriber: self()])

@@ -142,6 +142,8 @@ defmodule Exra do
 
   def handle_cast(message = {:append_from_user, _command}, state),
     do: LogEntry.handle_cast(message, state)
+  def handle_cast(message = {:append_from_user, _command, _from}, state),
+      do: LogEntry.handle_cast(message, state)
   def handle_cast(message = {:config_change, _command}, state),
     do: LogEntry.handle_cast(message, state)
   def handle_cast(message = {:replicated, _index, _from}, state),
@@ -256,6 +258,7 @@ defmodule Exra do
     {:reply, :ok, state}
   end
   def handle_call(message = {:config_change, _}, from, state), do: Exra.LogEntry.handle_call(message, from, state)
+  def handle_call(message = {:command, _}, from, state), do: Exra.LogEntry.handle_call(message, from, state)
 
   def tick(:timeout, state = %{auto_tick: true}) do
     # IO.puts("tick :timeout")
@@ -284,5 +287,13 @@ defmodule Exra do
       term: log.term
     }, self(), term, committed_index}, state)
     :ok
+  end
+
+  @doc"""
+  Append a log. Ideally would be a {key, value} tuple
+  """
+  def command(command) do
+    {Exra, Node.self()}
+    |> GenServer.call({:command, command})
   end
 end
