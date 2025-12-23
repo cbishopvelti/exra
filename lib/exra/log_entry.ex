@@ -148,7 +148,10 @@ defmodule Exra.LogEntry do
           pid: self(),
           new_committed_index: new_committed_index,
           old_committed_index: committed_index,
-          state: state.state
+          role: state.state,
+          logs: state.logs
+          |> Enum.take_while(fn %{index: index} -> index > committed_index end)
+          |> Enum.drop_while(fn %{index: index} -> index > new_committed_index end)
         }])
         compact_logs(logs, new_committed_index)
       false -> # Nothings changed, don't tell anyone
@@ -204,7 +207,10 @@ defmodule Exra.LogEntry do
             pid: self(),
             new_committed_index: committed_index,
             old_committed_index: my_committed_index,
-            state: my_state
+            role: my_state,
+            logs: state.logs
+            |> Enum.take_while(fn %{index: index} -> index > my_committed_index end)
+            |> Enum.drop_while(fn %{index: index} -> index > committed_index end)
           }])
         end
 
@@ -242,7 +248,10 @@ defmodule Exra.LogEntry do
         pid: self(),
         new_committed_index: new_committed_index,
         old_committed_index: old_committed_index,
-        state: state.state
+        role: state.state,
+        logs: state.logs
+        |> Enum.take_while(fn %{index: index} -> index > old_committed_index end)
+        |> Enum.drop_while(fn %{index: index} -> index > new_committed_index end)
       }])
     else
     end

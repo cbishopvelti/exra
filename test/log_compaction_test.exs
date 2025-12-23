@@ -1,7 +1,6 @@
 defmodule LogCompactionTest do
   use ExUnit.Case
 
-  @tag only: true
   @tag compaction: true
   test "Log compaction deduplicates commands and config changes" do
     # Enable log compaction
