@@ -156,7 +156,7 @@ defmodule Exra.LogEntry do
     end
 
     {:noreply, %{state | next_indexes: new_next_indexes, match_indexes: new_match_indexes, committed_index: new_committed_index,
-      nodes:  nodes |> Enum.filter(fn (node) -> node != self() end),
+      nodes:  nodes |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end),
       logs: logs
     }}
   end
