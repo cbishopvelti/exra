@@ -36,6 +36,22 @@ defmodule Exra.LogEntry do
     GenServer.cast(leader, message)
     {:noreply, state}
   end
+  # Come from a call, so we should only be a leader.
+  def handle_cast({:append_from_user, command, from}, state = %{
+    state: :leader,
+    term: term,
+    logs: logs,
+  }) do
+
+    log = %{
+      term: term,
+      index: hd(logs).index + 1,
+      command: command,
+      type: :command,
+      from: from
+    }
+    append_log(log, state)
+  end
 
   def handle_cast({:config_change, command}, state = %{
     state: :leader,
@@ -144,14 +160,25 @@ defmodule Exra.LogEntry do
         |> Enum.each(fn (node) ->
           GenServer.cast(node, {:committed_index, new_committed_index})
         end)
+
+        committed_logs = state.logs
+        |> Enum.take_while(fn %{index: index} -> index > committed_index end)
+        |> Enum.drop_while(fn %{index: index} -> index > new_committed_index end)
+
+        committed_logs |> Enum.filter(fn %{from: from} -> true
+          _ -> false
+        end)
+        |> Enum.each(fn log = %{from: from} ->
+          # Tell our caller that their log has been committed
+          GenServer.reply(from, :ok)
+        end)
+
         Exra.Utils.notify_state_machine(state, :committed, [%{
           pid: self(),
           new_committed_index: new_committed_index,
           old_committed_index: committed_index,
           role: state.state,
-          logs: state.logs
-          |> Enum.take_while(fn %{index: index} -> index > committed_index end)
-          |> Enum.drop_while(fn %{index: index} -> index > new_committed_index end)
+          logs: committed_logs
         }])
         compact_logs(logs, new_committed_index)
       false -> # Nothings changed, don't tell anyone
@@ -284,6 +311,15 @@ defmodule Exra.LogEntry do
     {:reply, GenServer.call(state.leader, message, 512), state}
   end
   def handle_call({:config_change, _}, _from, state) do
+    {:reply, :no_leader, state}
+  end
+
+  def handle_call({:command, command}, from, state = %{leader: leader, state: role}) when role == :leader or not is_nil(leader) do
+    leader_pid = if role == :leader, do: self(), else: leader
+    GenServer.cast(leader_pid, {:append_from_user, command, from})
+    {:noreply, state}
+  end
+  def handle_call(message = {:command, command}, from, state)do
     {:reply, :no_leader, state}
   end
 
