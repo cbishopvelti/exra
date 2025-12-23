@@ -18,6 +18,18 @@ defmodule Exra.StateMachine do
   If the node is initialized as a follower, it wont run until another node is elected leader. This avoids receiving a follower event directly followed by a leader event.
   """
   @callback follower(term ::Integer, nodes ::Integer) ::any()
+
+  @doc """
+  Callback invoked when a logs are committed.
+  """
+  @callback committed(%{
+    pid: pid(),
+    new_committed_index: integer(),
+    old_committed_index: integer(),
+    logs: [Exra.LogEntry.t()],
+    role: String.t()
+  }) ::any()
+
   @doc """
   This is run when a node is removed from the cluster, this could happen on configuration change
   """

@@ -136,11 +136,11 @@ defmodule Exra.LogEntry do
       nodes
     end
 
-    case new_committed_index > committed_index do
+    logs = case new_committed_index > committed_index do
       true ->
 
         nodes
-        |> Enum.filter(fn (node) -> node != self() end)
+        |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
         |> Enum.each(fn (node) ->
           GenServer.cast(node, {:committed_index, new_committed_index})
         end)
@@ -148,14 +148,19 @@ defmodule Exra.LogEntry do
           pid: self(),
           new_committed_index: new_committed_index,
           old_committed_index: committed_index,
-          state: state.state
+          role: state.state,
+          logs: state.logs
+          |> Enum.take_while(fn %{index: index} -> index > committed_index end)
+          |> Enum.drop_while(fn %{index: index} -> index > new_committed_index end)
         }])
+        compact_logs(logs, new_committed_index)
       false -> # Nothings changed, don't tell anyone
-        nil
+        logs
     end
 
     {:noreply, %{state | next_indexes: new_next_indexes, match_indexes: new_match_indexes, committed_index: new_committed_index,
-      nodes:  nodes |> Enum.filter(fn (node) -> node != self() end)
+      nodes:  nodes |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end),
+      logs: logs
     }}
   end
 
@@ -202,7 +207,10 @@ defmodule Exra.LogEntry do
             pid: self(),
             new_committed_index: committed_index,
             old_committed_index: my_committed_index,
-            state: my_state
+            role: my_state,
+            logs: state.logs
+            |> Enum.take_while(fn %{index: index} -> index > my_committed_index end)
+            |> Enum.drop_while(fn %{index: index} -> index > committed_index end)
           }])
         end
 
@@ -219,6 +227,7 @@ defmodule Exra.LogEntry do
       state.logs
     )
 
+    new_logs = compact_logs(new_logs, committed_index)
 
     {:noreply, %{state |
       logs: new_logs,
@@ -239,17 +248,23 @@ defmodule Exra.LogEntry do
         pid: self(),
         new_committed_index: new_committed_index,
         old_committed_index: old_committed_index,
-        state: state.state
+        role: state.state,
+        logs: state.logs
+        |> Enum.take_while(fn %{index: index} -> index > old_committed_index end)
+        |> Enum.drop_while(fn %{index: index} -> index > new_committed_index end)
       }])
     else
     end
 
     {old_nodes, new_nodes, _log} = get_config_nodes_v2(state.nodes, new_committed_index, logs)
 
+    logs = compact_logs(logs, new_committed_index)
+
     {:noreply,
       %{state |
         committed_index: new_committed_index,
-        nodes: (old_nodes ++ new_nodes) |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end)
+        nodes: (old_nodes ++ new_nodes) |> Enum.reject(fn (node) -> Exra.Utils.is_self?(node) end),
+        logs: logs
       }
     }
   end
@@ -366,6 +381,48 @@ defmodule Exra.LogEntry do
       logs: new_logs,
       match_indexes: match_indexes
     }}
+  end
+
+  defp compact_logs(logs, committed_index) do
+    case Application.get_env(:exra, :compact_logs, false) do
+      true ->
+        do_compact_logs(logs, committed_index)
+      _ ->
+        logs
+    end
+  end
+
+  defp do_compact_logs(logs, committed_index) do
+    {uncommitted, committed} = Enum.split_while(logs, fn log -> log.index > committed_index end)
+
+    {compacted_committed, _seen_keys, _seen_config} =
+      Enum.reduce(committed, {[], MapSet.new(), false}, fn log, {acc, seen_keys, seen_config} ->
+        case log.type do
+          :command ->
+            case log.command do
+              {key, _value} ->
+                if MapSet.member?(seen_keys, key) do
+                  {acc, seen_keys, seen_config}
+                else
+                  {[log | acc], MapSet.put(seen_keys, key), seen_config}
+                end
+              _ ->
+                {[log | acc], seen_keys, seen_config}
+            end
+
+          :config_change ->
+            if seen_config do
+              {acc, seen_keys, seen_config}
+            else
+              {[log | acc], seen_keys, true}
+            end
+
+          _ ->
+            {[log | acc], seen_keys, seen_config}
+        end
+      end)
+
+    uncommitted ++ Enum.reverse(compacted_committed)
   end
 
 end

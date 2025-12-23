@@ -112,19 +112,19 @@ defmodule ExraTest do
     GenServer.cast(pid1, {:append_from_user, "a log entry"})
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid2,
-      state: :follower,
+      role: :follower,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid3,
-      state: :follower,
+      role: :follower,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
@@ -157,19 +157,19 @@ defmodule ExraTest do
     GenServer.cast(pid1, {:append_from_user, "a log entry"})
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid2,
-      state: :follower,
+      role: :follower,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid3,
-      state: :follower,
+      role: :follower,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
@@ -184,13 +184,13 @@ defmodule ExraTest do
     GenServer.cast(pid1, {:append_from_user, "second log entry"})
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       new_committed_index: 2,
       old_committed_index: 1
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid2,
-      state: :follower,
+      role: :follower,
       new_committed_index: 2,
       old_committed_index: 1
     }]})
@@ -214,26 +214,26 @@ defmodule ExraTest do
 
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       new_committed_index: 3,
       old_committed_index: 2
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid2,
-      state: :follower,
+      role: :follower,
       new_committed_index: 3,
       old_committed_index: 2
     }]})
     # Two, as it'll broadcast on when it's cought up, and then again on new message
     assert_receive({:committed, _, [%{
       pid: ^pid3,
-      state: :follower,
+      role: :follower,
       new_committed_index: 2,
       old_committed_index: 1
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid3,
-      state: :follower,
+      role: :follower,
       new_committed_index: 3,
       old_committed_index: 2
     }]})
@@ -261,12 +261,12 @@ defmodule ExraTest do
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
     assert_receive{:committed, _, [%{
       pid: ^pid4,
-      state: :learner
+      role: :learner
     }]}
 
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       old_committed_index: 0,
       new_committed_index: 1
     }]})
@@ -293,19 +293,19 @@ defmodule ExraTest do
     GenServer.cast(pid1, {:append_from_user, "First log entry"})
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid2,
-      state: :follower,
+      role: :follower,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
     assert_receive({:committed, _, [%{
       pid: ^pid3,
-      state: :follower,
+      role: :follower,
       new_committed_index: 1,
       old_committed_index: 0
     }]})
@@ -316,20 +316,20 @@ defmodule ExraTest do
     GenServer.call(pid1, {:new_nodes, [pid1, pid2, pid3, pid4]})
     assert_receive{:committed, _, [%{
       pid: ^pid4,
-      state: :learner,
+      role: :learner,
       new_committed_index: 1,
       old_committed_index: 0
     }]}
     assert_receive{:committed, _, [%{
       pid: ^pid4,
-      state: :follower,
+      role: :follower,
       new_committed_index: 2,
       old_committed_index: 1
     }]}
 
     assert_receive({:committed, _, [%{
       pid: ^pid1,
-      state: :leader,
+      role: :leader,
       old_committed_index: 1,
       new_committed_index: 2
     }]})
