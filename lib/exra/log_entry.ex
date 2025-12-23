@@ -375,6 +375,15 @@ defmodule Exra.LogEntry do
   end
 
   defp compact_logs(logs, committed_index) do
+    case Application.get_env(:exra, :compact_logs, false) do
+      true ->
+        do_compact_logs(logs, committed_index)
+      _ ->
+        logs
+    end
+  end
+
+  defp do_compact_logs(logs, committed_index) do
     {uncommitted, committed} = Enum.split_while(logs, fn log -> log.index > committed_index end)
 
     {compacted_committed, _seen_keys, _seen_config} =
