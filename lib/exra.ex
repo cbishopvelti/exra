@@ -1,4 +1,31 @@
 defmodule Exra do
+  @moduledoc """
+  Creates a raft cluster. Nodes are added on the :nodeup event.
+
+  To handle events, implement the `Exra.StateMachine` and in you're config.exs add:
+  ```
+  config :exra, :state_machine, MyApp.MyStateMachine
+  ```
+
+  Configuration to auto remove old logs, this will remove any historic duplicate logs of the format {key, value}:
+  ```
+  config :exra, :compact_logs, true
+  ```
+
+  To append a log see: `Exra.command/1`
+
+  Nodes are never removed, if you want to remove them manually:
+  ```
+  old_nodes = GenServer.call(Exra, :get_state).nodes
+  GenServer.call(Exra, {:config_change, {old_nodes, new_nodes}})
+  ```
+
+  > **Warning** Committed logs can be lost if a cluster loses it's majority.
+  If Node A starts up, it's alone so becomes leader, and has a log committed
+  Node B starts up and becomes leader, and has a log committed
+  If Node A and Node B join together, whichever loses the leadership election will lose it's logs.
+  """
+
   use GenServer, restart: :transient
 
   require Logger
@@ -20,6 +47,7 @@ defmodule Exra do
   end
 
 
+  @doc false
   defmacro get_quorum(nodes) do
     quote do
       # max(div(length(unquote(nodes)), 2) + 1, 2)
@@ -48,6 +76,30 @@ defmodule Exra do
     leader: pid() | nil
   }
 
+  @doc """
+  Initializes the Raft server state.
+
+  This callback sets the node state to `:follower`, initializes the write-ahead log with a
+  genesis entry, and triggers the first election timeout (unless `auto_tick` is false).
+
+  ## Arguments
+
+  The `args` map requires the following keys:
+
+  * `:name` - The identifier for the current node.
+  * `:init_nodes` - A list of other nodes in the cluster.
+
+  It also accepts the following optional keys:
+
+  * `:state_machine` - The module responsible for applying committed logs. Defaults to the `:state_machine` configured in `:exra`.
+  * `:auto_tick` - Boolean. If `true`, the election timer starts immediately, otherwise you need to manually call :timeout and :send_heartbeat. Defaults to `true`.
+  * `:subscriber` - A PID or name to receive event notifications from this node.
+  * `:state` - The initial Raft role (e.g., `:follower`, `:learner`). Defaults to `:follower`.
+
+  ## Returns
+
+  Returns `{:ok, state}` with the initial election timeout scheduled.
+  """
   def init(args) do
     state = %{
       name: args.name,
@@ -78,10 +130,6 @@ defmodule Exra do
       subscriber: Map.get(args, :subscriber),
       leader: nil
     }
-
-    # if state.state == :follower do
-    #   Exra.Utils.notify_state_machine(state, :follower, [state.term, length(state.nodes) + 1])
-    # end
 
     {:ok, %{state | timeout: tick(:timeout, state) }}
   end
@@ -260,6 +308,7 @@ defmodule Exra do
   def handle_call(message = {:config_change, _}, from, state), do: Exra.LogEntry.handle_call(message, from, state)
   def handle_call(message = {:command, _}, from, state), do: Exra.LogEntry.handle_call(message, from, state)
 
+  @doc false
   def tick(:timeout, state = %{auto_tick: true}) do
     # IO.puts("tick :timeout")
     Process.send_after(self(), :timeout, Enum.random(state.timeout_min..state.timeout_max))
@@ -272,6 +321,7 @@ defmodule Exra do
     nil
   end
 
+  @doc false
   def broadcast_from(message, state) do
     # IO.inspect(state.nodes, label: "002 broadcast_from")
     state.nodes
@@ -280,7 +330,7 @@ defmodule Exra do
       GenServer.cast(node, message)
     end)
   end
-
+  @doc false
   def send_heartbeat(term, state = %{logs: [log | _], committed_index: committed_index}) do
     __MODULE__.broadcast_from({:replicate, [], %{
       index: log.index,

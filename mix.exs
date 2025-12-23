@@ -4,7 +4,7 @@ defmodule Exra.MixProject do
   def project do
     [
       app: :exra,
-      version: "0.1.0",
+      version: "0.0.1",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps()
@@ -22,7 +22,8 @@ defmodule Exra.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:mimic, "~> 2.2", only: :test}
+      {:mimic, "~> 2.2", only: :test},
+      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]

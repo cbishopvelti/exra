@@ -324,7 +324,7 @@ defmodule Exra.LogEntry do
   end
 
   # Retrieves the last log with configuration change
-  def get_config_nodes(nodes, logs) do
+  defp get_config_nodes(nodes, logs) do
     log = logs |> Enum.find(fn
       (%{type: :config_change, command: {_a, _b}}) -> true
       _ -> false
@@ -337,7 +337,7 @@ defmodule Exra.LogEntry do
     end
   end
 
-  def get_config_nodes_v2(nodes, committed_index, logs) do
+  defp get_config_nodes_v2(nodes, committed_index, logs) do
     uncommitted_log = logs
     |> Enum.take_while(fn (%{index: index}) -> index > committed_index end)
     |> Enum.find(fn
@@ -364,6 +364,7 @@ defmodule Exra.LogEntry do
 
   end
 
+  @docs false
   def nodes_removed(nodes) do
     nodes
     |> Enum.each(fn (node) ->
@@ -374,7 +375,7 @@ defmodule Exra.LogEntry do
   def nodes_added(_nodes) do
   end
 
-  def append_log(log, state = %{
+  defp append_log(log, state = %{
     state: :leader,
     term: term,
     logs: logs,
